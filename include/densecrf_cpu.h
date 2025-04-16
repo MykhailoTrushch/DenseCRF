@@ -46,23 +46,24 @@ public:
     void setUnaryEnergyFromLabel(const short* labelGPU, float* confidences) override;
 };
 
-static inline float very_fast_exp(float x) {
-    return 1-x*(0.9999999995f-x*(0.4999999206f-x*(0.1666653019f-x*(0.0416573475f
-                           -x*(0.0083013598f-x*(0.0013298820f-x*(0.0001413161f)))))));
-}
-static inline float fast_exp(float x) {
-    bool lessZero = true;
-    if (x < 0) { lessZero = false; x = -x; }
-    if (x > 20) return 0;
-    int mult = 0;
-    while (x > 0.69*2*2*2) { mult+=3; x /= 8.0f; }
-    while (x > 0.69*2*2) { mult+=2; x /= 4.0f; }
-    while (x > 0.69) { mult++; x /= 2.0f; }
-    x = very_fast_exp(x);
-    while (mult) { mult--; x = x*x; }
-    if (lessZero) { return 1 / x;
-    } else { return x; }
-}
+// interesingly, std::exp is faster and most likely more precise. anyway, I don't think that this implementation makes a lot of difference in the inference results.
+// static inline float very_fast_exp(float x) {
+//     return 1-x*(0.9999999995f-x*(0.4999999206f-x*(0.1666653019f-x*(0.0416573475f
+//                            -x*(0.0083013598f-x*(0.0013298820f-x*(0.0001413161f)))))));
+// }
+// static inline float fast_exp(float x) {
+//     bool lessZero = true;
+//     if (x < 0) { lessZero = false; x = -x; }
+//     if (x > 20) return 0;
+//     int mult = 0;
+//     while (x > 0.69*2*2*2) { mult+=3; x /= 8.0f; }
+//     while (x > 0.69*2*2) { mult+=2; x /= 4.0f; }
+//     while (x > 0.69) { mult++; x /= 2.0f; }
+//     x = very_fast_exp(x);
+//     while (mult) { mult--; x = x*x; }
+//     if (lessZero) { return 1 / x;
+//     } else { return x; }
+// }
 
 
 template<int M>
@@ -77,7 +78,7 @@ void DenseCRFCPU<M>::expAndNormalize( float* out, const float* in, float scale /
                 mx = scale*b[j];
         float tt = 0;
         for( int j=0; j<M; j++ ){
-            V[j] = fast_exp( scale*b[j]-mx );
+            V[j] = std::exp( scale*b[j]-mx );
             tt += V[j];
         }
         // Make it a probability
