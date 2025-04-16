@@ -608,9 +608,7 @@ public:
                 for( int k=0; k<value_size; k++ )
                     new_val[k] = old_val[k]+half*(n1_val[k] + n2_val[k]);
             }
-            __m128 * tmp = values;
-            values = new_values;
-            new_values = tmp;
+            std::swap(values, new_values);
         }
         // Alpha is a magic scaling constant (write Andrew if you really wanna understand this)
         float alpha = 1.0f / (1+powf(2, -d_));
