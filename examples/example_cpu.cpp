@@ -94,7 +94,7 @@ int main( int argc, char* argv[]){
 
     // Do map inference
     auto start = steady_clock::now();
-    crf.inference(10, true);
+    crf.inference(10, /*with_map=*/true);
     auto stop = steady_clock::now();
     auto duration = duration_cast<microseconds>(stop - start);
     cout << "Time Elaspsed for inference = " << duration.count() / 1000.0 << "ms" << endl;
