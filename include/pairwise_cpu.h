@@ -11,14 +11,28 @@ protected:
     PermutohedralLatticeCPU lattice_;
     float w_;
     float *norm_;
+    NormalizationType ntype_;
 public:
-    PottsPotentialCPU(const float *features, int N, float w) : PairwisePotential(N), w_(w) {
+    PottsPotentialCPU(const float *features, int N, float w, NormalizationType ntype = NORMALIZE_SYMMETRIC) : PairwisePotential(N), w_(w), ntype_(ntype) {
         lattice_.init(features, F, N);
         norm_ = new float[N];
         std::fill(norm_, norm_ + N, 1.0f);
         lattice_.compute(norm_, norm_, 1);
-        for (int i = 0; i < N_; ++i) {
-            norm_[i] = 1.0f / (norm_[i] + 1e-20f);
+        if (ntype == NO_NORMALIZATION) {
+            float mean_norm = 0;
+			for ( int i=0; i<N; i++ )
+				mean_norm += norm_[i];
+			mean_norm = N / mean_norm;
+			for ( int i=0; i<N; i++ )
+				norm_[i] = mean_norm;
+        } else if (ntype == NORMALIZE_SYMMETRIC) {
+            for (int i = 0; i < N_; ++i) {
+                norm_[i] = 1.0f / sqrt(norm_[i] + 1e-20f);
+            }
+        } else {
+            for (int i = 0; i < N_; ++i) {
+                norm_[i] = 1.0f / sqrt(norm_[i] + 1e-20f);
+            }
         }
     }
 
@@ -50,10 +64,25 @@ public:
     }
 
     void apply(float *out_values, const float *in_values, float *tmp) const {
-        lattice_.compute(tmp, in_values, M);
-        for (int i = 0, k = 0; i < N_; i++)
-            for (int j = 0; j < M; j++, k++)
-                out_values[k] += w_ * norm_[i] * tmp[k];
+        float* tmp2 = new float[N_*M];
+        if (ntype_ == NORMALIZE_SYMMETRIC || ntype_ == NORMALIZE_BEFORE) {
+            for (int i = 0, k = 0; i < N_; i++)
+                for (int j = 0; j < M; j++, k++)
+                    tmp[k] = norm_[i] * in_values[k];
+        } else {
+            std::memcpy(tmp, in_values, N_*M);
+        }
+        lattice_.compute(tmp2, tmp, M);
+        for (int i = 0, k = 0; i < N_; i++) {
+            for (int j = 0; j < M; j++, k++) {
+                if (ntype_ == NORMALIZE_SYMMETRIC || ntype_ == NORMALIZE_AFTER) {
+                    out_values[k] += w_ * norm_[i] * tmp2[k];
+                } else {
+                    out_values[k] += w_ * tmp2[k];
+                }
+            }
+        }
+        delete[] tmp2;
     }
 };
 

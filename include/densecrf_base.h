@@ -8,6 +8,19 @@ enum Device {
     CPU, GPU
 };
 
+// The filter in the dense CRF can be normalized in a few different ways
+enum NormalizationType {
+	NO_NORMALIZATION,    // No normalization whatsoever (will lead to a substantial approximation error)
+	NORMALIZE_BEFORE,    // Normalize before filtering (Not used, just there for completeness)
+	NORMALIZE_AFTER,     // Normalize after filtering (original normalization in NIPS 11 work)
+	NORMALIZE_SYMMETRIC, // Normalize before and after (ICML 2013, low approximation error and preserves the symmetry of CRF)
+};
+enum KernelType {
+	CONST_KERNEL,   // Constant kernel, no parameters
+	DIAG_KERNEL,    // Diagonal kernel (scaling features)
+	FULL_KERNEL,    // Full kernel matrix (arbitrary squared matrix)
+};
+
 // Define various pair wise weight (compatibility) models.
 class PairwisePotential {
 protected:
@@ -57,7 +70,8 @@ public:
     // Run inference and return the probabilities
     // All returned values are managed by class
     virtual void inference( int n_iterations, bool with_map = false, float relax = 1.0 ) {
-        startInference();
+        // Initializes current result with softmax over unaries
+        expAndNormalize( current_, unary_, -1 );
         for (int it = 0; it < n_iterations; ++it) {
             stepInference(relax);
         }
@@ -68,13 +82,8 @@ public:
     short* getMap() const { return map_; }
     float* getProbability() const { return current_; }
 
-    // Step by step inference
-    virtual void startInference() {
-        expAndNormalize( current_, unary_, -1 );
-    }
-
     virtual void stepInference( float relax = 1.0 ) {
-        // Set the unary potential
+        // Set next_ to the negative unary
         stepInit();
         // Add up all pairwise potentials
         for(unsigned int i = 0; i < pairwise_.size(); i++) {
