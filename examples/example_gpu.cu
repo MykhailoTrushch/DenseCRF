@@ -50,7 +50,26 @@ short * classify( const unsigned char * im, int W, int H, int M ){
     return res;
 }
 
+void initCuda(int argc, char **argv) {
+
+    cudaDeviceProp prop;
+    cudaGetDeviceProperties(&prop, 0);
+    printf("Device name: %s\n", prop.name);
+    printf("Max threads per block: %d\n", prop.maxThreadsPerBlock);
+    printf("Max threads dim: %d %d %d\n", prop.maxThreadsDim[0], prop.maxThreadsDim[1], prop.maxThreadsDim[2]);
+    printf("Max grid size: %d %d %d \n", prop.maxGridSize[0], prop.maxGridSize[1], prop.maxGridSize[2]);
+    printf("Shared memory per block: %d Kb\n", (int)(prop.sharedMemPerBlock/1024));
+    printf("Total global memory: %d Kb\n", (int)(prop.totalGlobalMem/1024));
+    printf("Warp size: %d\n", prop.warpSize);
+    printf("Memory pitch: %d\n", (int)prop.memPitch);
+    printf("Registers per block: %d\n", prop.regsPerBlock);
+    printf("Clock rate: %d\n", prop.clockRate);
+    printf("Texture alignment: %d\n", (int)prop.textureAlignment);
+    fflush(stdout);
+}
+
 int main( int argc, char* argv[]){
+    initCuda(1, argv);
     if (argc<4){
         printf("Usage: %s image annotations output\n", argv[0] );
         return 1;
@@ -112,7 +131,7 @@ int main( int argc, char* argv[]){
     crf.inference(10, true);
     auto stop = steady_clock::now();
     auto duration = duration_cast<microseconds>(stop - start);
-    cout << "Time Elaspsed for inference = " << duration.count() / 1000.0 << "ms" << endl;
+    cout << "Time Elaspsed for inference = " << duration.count() / 1000.0 << "ms\n";
     short * map = new short[W*H];
     short * mapGPU = crf.getMap();
     cudaMemcpy(map, mapGPU, sizeof(short) * W * H, cudaMemcpyDeviceToHost);
