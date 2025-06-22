@@ -5,6 +5,7 @@
 #include <vector>
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
+#include <cub/cub.cuh>
 
 namespace dcrf_cuda {
 
@@ -57,6 +58,7 @@ __global__ static void expNormKernel(int N, float* out, const float* in, float s
     const float* b = in + idx * M;
     // Find the max and subtract it so that the exp doesn't explode
     float mx = scale * b[0];
+    #pragma unroll
     for (int j = 1; j < M; ++j) {
         if (mx < scale * b[j]) {
             mx = scale * b[j];
@@ -64,17 +66,120 @@ __global__ static void expNormKernel(int N, float* out, const float* in, float s
     }
     float tt = 0.0;
     float V[M]{0};
+    #pragma unroll
     for (int j = 0; j < M; ++j) {
         V[j] = __expf(scale * b[j] - mx);
         tt += V[j];
     }
     // Make it a probability
+    #pragma unroll
     for (int j = 0; j < M; ++j) {
         V[j] /= tt;
     }
     float *a = out + idx * M;
+    #pragma unroll
     for (int j = 0; j < M; ++j) {
         a[j] = (1 - relax) * a[j] + relax * V[j];
+    }
+}
+
+template<int M>
+__global__ static void expNormKernelOnline(int N, float* out, const float* in, float scale, float relax)
+{
+    const int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx >= N)
+        return;
+    const float* b = in + idx * M;
+    float mx = scale * b[0];
+    float d = 1.0;
+    float m_new = 0.0;
+    for (int j = 1; j < M; ++j) {
+        float curr = scale * b[j];
+        if (mx < curr) {
+            m_new = curr;
+        } else {
+            m_new = mx;
+        }
+        d = d * __expf(mx - m_new) + __expf(curr - m_new);
+        mx = m_new;
+    }
+    float *a = out + idx * M;
+    float d_inverse = 1.0f/d;
+    for (int j = 0; j < M; ++j) {
+        a[j] = (1 - relax) * a[j] + relax * __expf(scale * b[j] - mx)*d_inverse;
+    }
+}
+
+struct __align__(8) MD
+{
+    float m;
+    float d;
+};
+
+__device__ __forceinline__ MD reduce_md_op(MD a, MD b)
+{
+    bool a_bigger = (a.m > b.m);
+    MD bigger_m = a_bigger ? a : b;
+    MD smaller_m = a_bigger ? b : a;
+    MD res;
+    res.d = bigger_m.d + smaller_m.d * __expf(smaller_m.m - bigger_m.m);
+    res.m = bigger_m.m;
+    return res;
+}
+
+template<int THREADBLOCK_SIZE>
+__launch_bounds__(THREADBLOCK_SIZE)
+__global__ void expNormKernelOnlineReduce(
+    int N,
+    float* __restrict__ out,
+    const float* __restrict__ in,
+    float scale,
+    float relax)
+{
+    int thread_id = threadIdx.x;
+    int vector_id = blockIdx.x;
+    // int THREADS_PER_VECTOR = 21;
+    // int VECTORS_PER_BLOCK = THREADBLOCK_SIZE / THREADS_PER_VECTOR;
+    // int vector_in_block = thread_id / THREADS_PER_VECTOR;
+    // int thread_in_vector = thread_id % THREADS_PER_VECTOR;
+
+    // if (thread_id + THREADBLOCK_SIZE * vector_id >= N) return;
+
+    // extern __shared__ float shmem[]; // if needed, not in this case
+
+    // reposition input and output
+    int M = THREADBLOCK_SIZE; // you can also pass M separately if needed
+    const float* x = in + vector_id * M;
+    float* y = out + vector_id * M;
+
+    typedef cub::BlockReduce<MD, THREADBLOCK_SIZE> BlockReduce;
+    __shared__ typename BlockReduce::TempStorage temp_storage;
+    __shared__ MD md_total;
+
+    MD md_partial;
+    md_partial.m = -FLT_MAX;
+    md_partial.d = 0.0f;
+
+    if (thread_id < M){
+        MD new_elem;
+        new_elem.m = scale * x[thread_id];
+        new_elem.d = 1.0f;
+        md_partial = new_elem;
+    }
+
+    MD md = BlockReduce(temp_storage).Reduce(md_partial, reduce_md_op);
+
+    if (thread_id == 0)
+        md_total = md;
+    __syncthreads();
+
+    float d_total_inverse = __fdividef(1.0f, md_total.d);
+
+
+    if(thread_id < M) {
+        float exp_scaled = __expf(scale * x[thread_id] - md_total.m);
+        // y[thread_id] = (1 - relax) * y[thread_id] + relax * exp_scaled * d_total_inverse;
+        y[thread_id] = exp_scaled * d_total_inverse;
     }
 }
 
@@ -85,6 +190,35 @@ void DenseCRFGPU<M>::expAndNormalize( float* out, const float* in, float scale /
     expNormKernel<M> <<<blocks, blockSize>>> (N_, out, in, scale, relax);
     cudaErrorCheck();
 }
+
+// template<int M>
+// void DenseCRFGPU<M>::expAndNormalize( float* out, const float* in, float scale /* = 1.0 */, float relax /* = 1.0 */ ) {
+//     dim3 blocks((N_ - 1) /BLOCK_SIZE + 1, 1, 1);
+//     dim3 blockSize(BLOCK_SIZE, 1, 1);
+//     expNormKernelCudnn<M> <<<blocks, BLOCK_SIZE>>> (N_, out, in);
+//     cudnnHandle_t cudnnHandle;
+//     cudnnCreate(&cudnnHandle);
+
+
+//     cudaErrorCheck();
+// }
+
+// template<int M>
+// void DenseCRFGPU<M>::expAndNormalize( float* out, const float* in, float scale /* = 1.0 */, float relax /* = 1.0 */ ) {
+    // dim3 blocks((N_ - 1) /BLOCK_SIZE + 1, 1, 1);
+    // dim3 blockSize(BLOCK_SIZE, 1, 1);
+//     expNormKernelOnline<M> <<<blocks, BLOCK_SIZE>>> (N_, out, in, scale, relax);
+//     cudaErrorCheck();
+// }
+
+
+// template<int M>
+// void DenseCRFGPU<M>::expAndNormalize( float* out, const float* in, float scale /* = 1.0 */, float relax /* = 1.0 */ ) {
+//     dim3 blocks(N_, 1, 1);
+//     dim3 blockSize(M, 1, 1);
+//     expNormKernelOnlineReduce<M> <<<blocks, M>>> (N_, out, in, scale, relax);
+//     cudaErrorCheck();
+// }
 
 template<int M>
 __global__ static void unaryFromLabel(const short* inLabel, float* outUnary, int N,
