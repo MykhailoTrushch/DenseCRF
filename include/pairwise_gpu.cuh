@@ -52,7 +52,7 @@ __global__ static void normalize(float* out, const float* in, const float* norm,
     const int ni = threadIdx.x + blockIdx.x * blockDim.x;
     const int vi = blockIdx.y;
     if (ni >= n) return;
-    out[ni * M + vi] += pw * norm[ni] * in[ni * M + vi];
+    out[ni * M + vi] += norm[ni] * in[ni * M + vi];
 }
 
 __global__ void fillOnes(float* norm, int N) {
@@ -153,7 +153,7 @@ public:
         normalize<M, F> <<<blocks, blockSize>>> (tmp, in_values, norm_, N_, w_);
         float *out_tmp;
         cudaMalloc(&out_tmp, N_ * M * sizeof(float));
-        lattice_->filter(out_tmp, tmp);
+        lattice_->filter(out_tmp, tmp, norm_);
         pottsWeight<M, F> <<<blocks, blockSize>>> (out_values, out_tmp, N_, w_);
     }
 };
